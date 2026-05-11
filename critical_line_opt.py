@@ -15,7 +15,7 @@ def make_array(x, shape):
 
 def make_array_like(x, y):
     if np.isscalar(x):
-        return np.full_like(y, x)
+        return np.full_like(y, fill_value=x)
     else:
         return np.asarray(x)
 
@@ -58,13 +58,12 @@ def find_max_return_enhanced(b, lb=0.0, ub=1.0):
         w[i] += to_add
         left_over -= to_add
         if left_over>0:
-            status[loop]=1
+            status[i]=1
         else:
-            status[loop]=0
+            status[i]=0
         loop += 1
     return w, status
     
-
 
 def augment_matrices(A, b):
     """Convert
@@ -127,60 +126,70 @@ def get_lagrangian_derivative(w, A, b, lb=0.0, ub=1.0, status=None):
     dLa = D.dot(xa)
     dLb = D.dot(xb) - f
     return dLa, dLb
+
+# from enum import Enum
+# AssetStatus = Enum("AssetStatus", "down in up")
+
+def lower_corner_criteria(status, xa, xb, dLa, dLb, lb=0.0, ub=1.0):
+    lb = make_array_like(lb, xa)
+    ub = make_array_like(ub, xa)
+    qs = []
+    for i, s in enumerate(status):
+        if s==0 and xb[i]<0:
+            # in variable may become up
+            # ub[i] = xa[i] + q * xb[i]
+            qi = (ub[i] - xa[i])/xb[i]
+            new_status = 1
+        elif s==0 and xb[i]>0:
+            # in variable may become down
+            # lb[i] = xa[i] + q * xb[i]
+            qi = (lb[i] - xa[i])/xb[i]
+            new_status = -1
+        elif s==1 and dLb[i]<0:
+            # up variable may become in
+            qi = -dLa[i]/dLb[i]
+            new_status = 0
+        elif s==-1 and dLb[i]>0:
+            # up/down variable may become in
+            qi = -dLa[i]/dLb[i]
+            new_status = 0
+        else:
+            continue
+        qs.append((i, qi, new_status))
+    return qs
+
     
 def lower_corner(q, w, A, b, lb=0.0, ub=1.0, status=None, nround=8):
     lb = make_array_like(lb, w)
     ub = make_array_like(ub, w)
-    status = status if status is not None else find_status(w, lb, ub)
+    status = status.copy() if status is not None else find_status(w, lb, ub)
     xa, xb = get_critical_line(w, A, b, lb=lb, ub=ub, status=status)
     dLa, dLb = get_lagrangian_derivative(w, A, b, lb=lb, ub=ub, status=status)
-    qs = []
-    for i, s in enumerate(status):
-        if s==0:
-            # in variable might become up or down
-            if xb[i] < 0:
-                # in variable may become up
-                # ub[i] = xa[i] + q * xb[i]
-                qi = (ub[i] - xa[i])/xb[i]
-            elif xb[i] > 0:
-                # in variable may become down
-                qi = (lb[i] - xa[i])/xb[i]
-            else:
-                continue
-        else:
-            # up/down variable may become in
-            qi = -dLa[i]/dLb[i]
-        # if np.round(qi, nround)<np.round(q, nround):
-        if qi<q:
-            qs.append((i, qi))
-    i, qi = max(qs, key=lambda x:x[1], default=(None, 0))
+    qs = lower_corner_criteria(status, xa, xb, dLa, dLb, lb, ub)
+    qs = list(filter(lambda x: np.round(x[1], nround)<np.round(q, nround), qs))
+    if len(qs)==0:
+        return None, None, None, None
+    i, qi, new_status = max(qs, key=lambda x:x[1], default=(None, None, None))
     xi = xa + qi * xb
     wi = xi[:-1]
-    print(f"Received {q} {w} {status} and got candidates {qs} selecting {i} {qi} {wi}")
-    return i, qi, wi
+    status[i] = new_status
+    return i, qi, wi, status
     
 def calc_corners(A, b, lb=0.0, ub=1.0):
+    if len(b.shape)==2 and len(A.shape)==1:
+        raise ValueError("b should be 1d and A should be 2d")
     qs = []
     ws = []
     q = np.inf
-    lb, ub = make_array(lb, b.shape[0]), make_array(ub, b.shape[0])
-    # w = find_max_return(b, lb=lb, ub=ub)
-    # status0 = find_status(w, lb, ub)
+    lb, ub = make_array_like(lb, b), make_array_like(ub, b)
     w, status0 = find_max_return_enhanced(b, lb=lb, ub=ub)
     i = 0
     while (q is not None) and q>=0 and i is not None:
         qs.append(q)
         ws.append(w)
-        i, q, w = lower_corner(q, w, A, b, lb=lb, ub=ub, status=status0)
-        if i is not None:
-            s = status0[i]
-            if s==0:
-                new_status = find_status(w, lb, ub)
-                status0[i] = new_status[i]
-            else:
-                status0[i] = 0
-            print(f"Appending {q} {w} and new status {status0}")
+        i, q, w, status0 = lower_corner(q, w, A, b, lb=lb, ub=ub, status=status0)
     return np.array(qs[::-1]), np.array(ws[::-1])
+
 # %%
 def example_vars():
     b = 1 + np.array([2.8, 6.3, 10.8])/100
@@ -196,3 +205,4 @@ def print_example1():
     assert np.allclose(winf, [0.2, 0.3, 0.5])
     # compute_neighbours(np.inf, winf, A, b, lb, ub)
     qs, ws = calc_corners(A, b, lb, ub)
+    return qs, ws
