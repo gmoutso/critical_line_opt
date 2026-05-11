@@ -1,6 +1,10 @@
 # %%
+# Critical Line Algorithm
+# min L = wT.A.w/2 - q * wT.b subject to constraints sum(w)=1 and lb<=w<=ub.
+# dL/dw = A.w - q * b - lambda * b
+# KKT condition dL/dw<=0 at w=ub, dL/dw>=0 at w=lb, dL/dw=0 in-bound.
 # https://web.stanford.edu/~wfsharpe/mia/opt/mia_opt3.htm
-# L = q * w.b - w.A.w/2 subject to constraints sum(w)=1 and lb<=w<=ub.
+
 import numpy as np
 
 def make_array(x, shape):
@@ -9,13 +13,28 @@ def make_array(x, shape):
     else:
         return np.asarray(x)
 
-def find_max_return_opt(b, lb=0.0, ub=1.0):
-    n = b.shape[-1]
-    lb = make_array(lb, n)
-    ub = make_array(ub, n)
+def make_array_like(x, y):
+    if np.isscalar(x):
+        return np.full_like(y, x)
+    else:
+        return np.asarray(x)
+
+def find_status(w, lb=0.0, ub=1.0, nround=8):
+    lb = make_array_like(lb, w)
+    ub = make_array_like(ub, w)
+    atol = 10**(-nround)
+    return np.select([w<lb , np.isclose(w, lb, atol=atol),
+                      w>ub , np.isclose(w, ub, atol=atol),
+                      True],
+                     [-1, -1, +1, +1, 0])
+
+
+def find_max_return(b, lb=0.0, ub=1.0):
+    lb = make_array_like(lb, b)
+    ub = make_array_like(ub, b)
     w = lb.copy()
     left_over = 1 - w.sum()
-    arg_sorted = np.argsort(b)[::-1]
+    arg_sorted = np.argsort(-b)
     loop = 0
     while left_over > 0:
         i = arg_sorted[loop]
@@ -25,26 +44,43 @@ def find_max_return_opt(b, lb=0.0, ub=1.0):
         loop += 1
     return w
 
-def find_status(w, lb, ub, nround=8):
-    w = w.round(nround)
-    return np.select([w<=lb, w>=ub, True], [-1, +1, 0])
+def find_max_return_enhanced(b, lb=0.0, ub=1.0):
+    lb = make_array_like(lb, b)
+    ub = make_array_like(ub, b)
+    w = lb.copy()
+    status = make_array_like(-1, b)
+    left_over = 1 - w.sum()
+    arg_sorted = np.argsort(-b)
+    loop = 0
+    while left_over > 0:
+        i = arg_sorted[loop]
+        to_add = min(left_over, ub[i]-w[i])
+        w[i] += to_add
+        left_over -= to_add
+        if left_over>0:
+            status[loop]=1
+        else:
+            status[loop]=0
+        loop += 1
+    return w, status
+    
+
 
 def augment_matrices(A, b):
     """Convert
-    A . w = q * b  - lambda * e
+    A . w = q * b  + lambda * e  & sum(w)=1
     to
     D . [w ; -lambda] = k + q * f
     """
     ones = np.ones_like(b)
     zeros = np.zeros_like(b)
-    Du = np.hstack((A, ones[:, np.newaxis]))
-    Dl = np.append(ones, 0)
-    D = np.vstack((Du, Dl[np.newaxis]))
+    D = np.block([[A, ones[:, None]],
+                  [ones[None, :], 0]])
     k = np.append(zeros, 1)
     f = np.append(b, 0)
     return D, k, f
 
-def replace_with_hard_bounds(D, k, f, status, lb=0, ub=1):
+def replace_with_hard_bounds(D, k, f, status, lb=0.0, ub=1.0):
     n = k.shape[0] - 1
     zeros = np.zeros(n)
     eyez = np.hstack((np.eye(n), zeros[:, np.newaxis]))
@@ -62,41 +98,42 @@ def replace_with_hard_bounds(D, k, f, status, lb=0, ub=1):
     ff[:-1][bounded] = 0
     return Dd, kk, ff
 
-def augment_bounded_matrices(w, A, b, lb=0, ub=1, status=None):
-    """When bound is satisfied, replace the row equation with bounds.
+def augment_bounded_matrices(w, A, b, lb=0.0, ub=1.0, status=None):
+    """When bounds are satisfied, replace those row equation with hard bounds.
     row equations:
     D . [w ; -lambda] = k + q * f
-    bounds:
+    bounds on i:
     Di -> [deltaij;0]
     ki -> lb/ub
     fi -> 0
     """
-    D, k, f = augment_matrices(A, b)
     status = status if status is not None else find_status(w, lb, ub)
+    D, k, f = augment_matrices(A, b)
     Dd, kk, ff = replace_with_hard_bounds(D, k, f, status, lb=lb, ub=ub)
     return Dd, kk, ff
 
-def get_critical_line(q, w, A, b, lb=0.0, ub=1.0, status=None):
+def get_critical_line(w, A, b, lb=0.0, ub=1.0, status=None):
     Dd, kk, ff = augment_bounded_matrices(w, A, b, lb=lb, ub=ub, status=status)
     DDinv = np.linalg.inv(Dd)
     xa = DDinv.dot(kk)
     xb = DDinv.dot(ff)
     return xa, xb
 
-def get_lagrangian_derivative(q, w, A, b, lb=0.0, ub=1.0, status=None):
-    D, k, f = augment_matrices(A, b)
-    xa, xb = get_critical_line(q, w, A, b, lb=lb, ub=ub, status=status)
-    dLa = - D.dot(xa)
-    dLb = f - D.dot(xb)
+def get_lagrangian_derivative(w, A, b, lb=0.0, ub=1.0, status=None):
+    status = status if status is not None else find_status(w, lb, ub)
+    # D, k, f = augment_bounded_matrices(w, A, b, lb=lb, ub=ub, status=status)
+    D, k, f = augment_matrices(A, b) # same..
+    xa, xb = get_critical_line(w, A, b, lb=lb, ub=ub, status=status)
+    dLa = D.dot(xa)
+    dLb = D.dot(xb) - f
     return dLa, dLb
     
 def lower_corner(q, w, A, b, lb=0.0, ub=1.0, status=None, nround=8):
-    lb, ub = make_array(lb, w.shape[0]), make_array(ub, w.shape[0])
+    lb = make_array_like(lb, w)
+    ub = make_array_like(ub, w)
     status = status if status is not None else find_status(w, lb, ub)
-    xa, xb = get_critical_line(q, w, A, b, lb=lb, ub=ub, status=status)
-    print(f"x = {xa.round(nround)} + q * {xb.round(nround)}")
-    dLa, dLb = get_lagrangian_derivative(q, w, A, b, lb=lb, ub=ub, status=status)
-    print(f"dL = {dLa.round(nround)} + q * {dLb.round(nround)}")
+    xa, xb = get_critical_line(w, A, b, lb=lb, ub=ub, status=status)
+    dLa, dLb = get_lagrangian_derivative(w, A, b, lb=lb, ub=ub, status=status)
     qs = []
     for i, s in enumerate(status):
         if s==0:
@@ -113,7 +150,8 @@ def lower_corner(q, w, A, b, lb=0.0, ub=1.0, status=None, nround=8):
         else:
             # up/down variable may become in
             qi = -dLa[i]/dLb[i]
-        if np.round(qi, nround)<np.round(q, nround):
+        # if np.round(qi, nround)<np.round(q, nround):
+        if qi<q:
             qs.append((i, qi))
     i, qi = max(qs, key=lambda x:x[1], default=(None, 0))
     xi = xa + qi * xb
@@ -126,8 +164,9 @@ def calc_corners(A, b, lb=0.0, ub=1.0):
     ws = []
     q = np.inf
     lb, ub = make_array(lb, b.shape[0]), make_array(ub, b.shape[0])
-    w = find_max_return_opt(b, lb=lb, ub=ub)
-    status0 = find_status(w, lb, ub)
+    # w = find_max_return(b, lb=lb, ub=ub)
+    # status0 = find_status(w, lb, ub)
+    w, status0 = find_max_return_enhanced(b, lb=lb, ub=ub)
     i = 0
     while (q is not None) and q>=0 and i is not None:
         qs.append(q)
@@ -150,8 +189,10 @@ def example_vars():
     lb, ub = 0.2, 0.5
     C = sd[:, np.newaxis] * rho * sd[np.newaxis, :]
     return C, b, lb, ub
-A, b, lb, ub = example_vars()
-winf = find_max_return_opt(b, lb, ub)
-assert np.allclose(winf, [0.2, 0.3, 0.5])
-# compute_neighbours(np.inf, winf, A, b, lb, ub)
-qs, ws = calc_corners(A, b, lb, ub)
+
+def print_example1():
+    A, b, lb, ub = example_vars()
+    winf = find_max_return(b, lb, ub)
+    assert np.allclose(winf, [0.2, 0.3, 0.5])
+    # compute_neighbours(np.inf, winf, A, b, lb, ub)
+    qs, ws = calc_corners(A, b, lb, ub)
