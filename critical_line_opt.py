@@ -175,7 +175,7 @@ def lower_corner(q, w, A, b, lb=0.0, ub=1.0, status=None, nround=8):
     status[i] = new_status
     return i, qi, wi, status
     
-def calc_corners(A, b, lb=0.0, ub=1.0):
+def calc_corners(A, b, lb=0.0, ub=1.0, include_inf=False, include_zero=False):
     if len(b.shape)==2 and len(A.shape)==1:
         raise ValueError("b should be 1d and A should be 2d")
     qs = []
@@ -188,21 +188,11 @@ def calc_corners(A, b, lb=0.0, ub=1.0):
         qs.append(q)
         ws.append(w)
         i, q, w, status0 = lower_corner(q, w, A, b, lb=lb, ub=ub, status=status0)
-    return np.array(qs[::-1]), np.array(ws[::-1])
-
-# %%
-def example_vars():
-    b = 1 + np.array([2.8, 6.3, 10.8])/100
-    sd = np.array([1, 7.4, 15.4])/100
-    rho = np.array([[1, 0.4, 0.15],[0.4, 1, 0.35], [0.15, 0.35, 1]])
-    lb, ub = 0.2, 0.5
-    C = sd[:, np.newaxis] * rho * sd[np.newaxis, :]
-    return C, b, lb, ub
-
-def print_example1():
-    A, b, lb, ub = example_vars()
-    winf = find_max_return(b, lb, ub)
-    assert np.allclose(winf, [0.2, 0.3, 0.5])
-    # compute_neighbours(np.inf, winf, A, b, lb, ub)
-    qs, ws = calc_corners(A, b, lb, ub)
+    qs, ws = np.array(qs[::-1]), np.array(ws[::-1])
+    if not include_inf:
+        qs = qs[:-1]
+        ws = ws[:-1]
+    if include_zero:
+        qs = np.append(0, qs)
+        ws = np.vstack([ws[0], ws])
     return qs, ws

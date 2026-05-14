@@ -16,15 +16,6 @@ from critical_line_opt import (
 )
 
 
-def example_vars():
-    b = 1 + np.array([2.8, 6.3, 10.8]) / 100
-    sd = np.array([1, 7.4, 15.4]) / 100
-    rho = np.array([[1, 0.4, 0.15], [0.4, 1, 0.35], [0.15, 0.35, 1]])
-    lb, ub = 0.2, 0.5
-    C = sd[:, np.newaxis] * rho * sd[np.newaxis, :]
-    return C, b, lb, ub
-
-
 def example_vars1():
     b = np.array([2.8, 6.3, 10.8])
     sd = np.array([1, 7.4, 15.4])
